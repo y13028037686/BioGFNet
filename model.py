@@ -47,7 +47,7 @@ class GrowthSupervisor(nn.Module):
 class SEBlock3D(nn.Module):
     def __init__(self, channels, reduction=8):
         super().__init__()
-        hidden = max(1, channels // reduction)  # ✅ 确保至少1个通道
+        hidden = max(1, channels // reduction)  
         self.fc = nn.Sequential(
             nn.AdaptiveAvgPool3d(1),
             nn.Conv3d(channels, hidden, 1),
@@ -141,12 +141,12 @@ class HybridSegNet(nn.Module):
 
 
 
-base_model_path = os.path.join( "最佳模型_多标签240*240*160.pth")
-assert os.path.exists(base_model_path), "❌ 请先训练并保存 HybridSegNet 模型！"
+base_model_path = os.path.join( "best_model.pth")
+assert os.path.exists(base_model_path), "❌ "
 
 stage1_model = HybridSegNet().to(device)
 stage1_model.load_state_dict(torch.load(base_model_path)["model"])
-stage1_model.eval()  # 冻结
+stage1_model.eval()  
 
 
 
@@ -164,14 +164,12 @@ class KANResidualBlock(nn.Module):
         self.conv2 = nn.Conv3d(out_c, out_c, 3, padding=1)
         self.norm2 = nn.InstanceNorm3d(out_c)
 
-        # 🔥 KAN-style 非线性分支
         self.kan_branch = nn.Sequential(
             nn.Conv3d(out_c, out_c, 1),
             nn.SiLU(),
             nn.Conv3d(out_c, out_c, 1)
         )
 
-        # 通道注意力
         self.se = SEBlock3D(out_c, reduction)
         self.relu = nn.LeakyReLU(0.1, inplace=True)
 
@@ -187,7 +185,6 @@ class KANResidualBlock(nn.Module):
         out = self.relu(self.norm1(self.conv1(x)))
         out = self.norm2(self.conv2(out))  
 
-        # KAN 分支融合（加权残差）
         out = out + 0.3 * self.kan_branch(out)
 
         if self.downsample is not None:
@@ -198,15 +195,10 @@ class KANResidualBlock(nn.Module):
 
 
 class KANAttention3D(nn.Module):
-    """
-    通道 + 空间 + KAN 非线性联合注意力模块
-    """
     def __init__(self, ch, reduction=8):
         super().__init__()
-        # ---- 1️⃣ 通道注意力 (SE)
         self.se = SEBlock3D(ch, reduction)
 
-        # ---- 2️⃣ 空间注意力
         self.spatial = nn.Sequential(
             nn.Conv3d(ch, ch // reduction, kernel_size=1),
             nn.ReLU(inplace=True),
@@ -214,7 +206,6 @@ class KANAttention3D(nn.Module):
             nn.Sigmoid()        
         )
 
-        # ---- 3️⃣ KAN 非线性分支
         self.kan = nn.Sequential(
             nn.Conv3d(ch, ch, 1),
             nn.SiLU(),
@@ -222,17 +213,13 @@ class KANAttention3D(nn.Module):
         )
 
     def forward(self, x):
-        # 通道注意力
         x_se = self.se(x)
 
-        # 空间注意力
         spatial_mask = self.spatial(x_se)
         x_spatial = x_se * spatial_mask
 
-        # KAN 非线性近似映射（增强特征表达）
         x_kan = self.kan(x_spatial)
 
-        # 残差融合
         return x + 0.5 * x_kan
 
 
@@ -246,7 +233,6 @@ class MultiAttentionDecoder(nn.Module):
         self.up2 = nn.ConvTranspose3d(base * 4, base * 2, 2, stride=2)
         self.up1 = nn.ConvTranspose3d(base * 2, base, 2, stride=2)
 
-        # ✅ 改为真正多重注意力模块
         self.att4 = KANAttention3D(base * 8)
         self.att3 = KANAttention3D(base * 4)
         self.att2 = KANAttention3D(base * 2)
@@ -286,7 +272,6 @@ class MultiAttentionDecoder(nn.Module):
 class HybridSegNet_Fusion_Plus(nn.Module):
     def __init__(self, in_channels=4, stage1_channels=3, growth_channels=3, out_channels=3, base=32):
         super().__init__()
-        # Encoder 强化为 KANResidualBlock
         self.encoder = nn.ModuleDict({
             'enc1': KANResidualBlock(in_channels + stage1_channels, base),
             'enc2': KANResidualBlock(base, base * 2, stride=2),
@@ -295,10 +280,8 @@ class HybridSegNet_Fusion_Plus(nn.Module):
             'bottleneck': KANResidualBlock(base * 8, base * 16, stride=2)
         })
 
-        # Decoder 升级为 Multi-Attention
         self.decoder = MultiAttentionDecoder(out_c=out_channels, base=base)
 
-        # Cross Attention 保留 + 改为自适应门控
         self.cross_attn_e1 = CrossAttentionBlock(dim_q=base, dim_kv=growth_channels)
         self.cross_attn_e2 = CrossAttentionBlock(dim_q=base * 2, dim_kv=growth_channels)
         self.cross_attn_e3 = CrossAttentionBlock(dim_q=base * 4, dim_kv=growth_channels)
@@ -320,8 +303,6 @@ class HybridSegNet_Fusion_Plus(nn.Module):
 
 
 
-
-# ----------------- 保留你的 CrossAttention 实现 -----------------
 class CrossAttentionBlock(nn.Module):
     def __init__(self, dim_q, dim_kv, num_heads=4):
         super().__init__()
@@ -364,19 +345,16 @@ import torch.nn as nn
 from monai.losses import DiceLoss
 
 def weighted_hybrid_loss(pred, target):
-    """给ET通道更高权重的损失函数"""
+
     dice_loss = DiceLoss(sigmoid=True, reduction='mean')
     ce_loss = nn.BCEWithLogitsLoss(reduction='mean')
     
-    # 分别为三个通道计算损失
     loss_wt = dice_loss(pred[:,0:1], target[:,0:1]) + 0.3 * ce_loss(pred[:,0:1], target[:,0:1])
     loss_tc = dice_loss(pred[:,1:2], target[:,1:2]) + 0.3 * ce_loss(pred[:,1:2], target[:,1:2])
     loss_et = dice_loss(pred[:,2:3], target[:,2:3]) + 0.3 * ce_loss(pred[:,2:3], target[:,2:3])
     
-    # 权重分配：ET > TC > WT
-    return 1.0 * loss_wt + 1.2 * loss_tc + 2.0 * loss_et  # ET权重最高
+    return 1.0 * loss_wt + 1.2 * loss_tc + 2.0 * loss_et  
 
-# 在训练中使用
 loss_fn = weighted_hybrid_loss
 
 
